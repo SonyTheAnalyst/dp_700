@@ -8,18 +8,21 @@
 # In[36]:
 
 
-df = spark.read.table("sales_silver")
-display(df)
-
-
-# ### _**CREATE A DELTA GOLD TABLE**_
-
-# In[2]:
-
-
 from pyspark.sql.types import *
+from pyspark.sql.functions import col, dayofmonth, month, year, date_format, split, monotonically_increasing_id
 from delta.tables import *
 
+# ==========================================
+# 1. DATA INGESTION FROM SILVER
+# ==========================================
+# Loading the cleaned data processed in the previous stage
+df = spark.read.table("sales_silver")
+
+# ==========================================
+# 2. CREATE DIMENSION: DATE (dimdate_gold)
+# ==========================================
+
+# Step A: Create physical Delta table if it doesn't exist
 DeltaTable.createIfNotExists(spark) \
     .tableName("dbo.dimdate_gold") \
     .addColumn("OrderDate", DateType()) \
@@ -30,67 +33,143 @@ DeltaTable.createIfNotExists(spark) \
     .addColumn("yyyymm", StringType()) \
     .execute()
 
-
-# In[3]:
-
-
-from pyspark.sql.functions import col, dayofmonth, month, year, date_format
-
-# Create the dimDate_gold dataframe from distinct OrderDate values
+# Step B: Transform Silver data into Date Dimension format
 dfdimDate_gold = (
-    df.dropDuplicates(["OrderDate"])                # keep one row per date
+    df.dropDuplicates(["OrderDate"])
       .select(
           col("OrderDate"),
-          dayofmonth("OrderDate").alias("Day"),     # extract day number
-          month("OrderDate").alias("Month"),        # extract month number
-          year("OrderDate").alias("Year"),          # extract year number
-          date_format(col("OrderDate"), "MMM-yyyy").alias("mmmyyyy"),  # e.g. Jan-2021
-          date_format(col("OrderDate"), "yyyyMM").alias("yyyymm")      # e.g. 202101
+          dayofmonth("OrderDate").alias("Day"),
+          month("OrderDate").alias("Month"),
+          year("OrderDate").alias("Year"),
+          date_format(col("OrderDate"), "MMM-yyyy").alias("mmmyyyy"),
+          date_format(col("OrderDate"), "yyyyMM").alias("yyyymm")
       )
-      .orderBy("OrderDate")                         # sort chronologically
+      .orderBy("OrderDate")
 )
 
-# Preview the first 10 rows
-display(dfdimDate_gold)
-
-
-# In[5]:
-
-
-from delta.tables import *
-
-# Load the Delta table from the metastore
-deltaTable = DeltaTable.forPath(spark, "abfss://dp700lab6@onelake.dfs.fabric.microsoft.com/sales.Lakehouse/Tables/dbo/dimdate_gold")
-
-# Your dimdate DataFrame
-dfUpdates = dfdimDate_gold
-
-# Perform MERGE: update nothing, insert new rows
-deltaTable.alias("gold") \
-    .merge(
-        dfUpdates.alias("updates"),
-        "gold.OrderDate = updates.OrderDate"
-    ) \
-    .whenMatchedUpdate(set={
-        # No updates in your screenshot — leave empty
-    }) \
-    .whenNotMatchedInsert(values={
-        "OrderDate": "updates.OrderDate",
-        "Day": "updates.Day",
-        "Month": "updates.Month",
-        "Year": "updates.Year",
-        "mmmyyyy": "updates.mmmyyyy",
-        "yyyymm": "updates.yyyymm"
-    }) \
+# Step C: UPSERT (Merge) into the Date Table
+dt_date = DeltaTable.forName(spark, "dbo.dimdate_gold")
+dt_date.alias("gold") \
+    .merge(dfdimDate_gold.alias("updates"), "gold.OrderDate = updates.OrderDate") \
+    .whenNotMatchedInsertAll() \
     .execute()
 
+# ==========================================
+# 3. CREATE DIMENSION: CUSTOMER (dimcustomer_gold)
+# ==========================================
 
-# In[6]:
+# Step A: Create the Customer Delta table
+DeltaTable.createIfNotExists(spark) \
+    .tableName("dbo.dimcustomer_gold") \
+    .addColumn("CustomerName", StringType()) \
+    .addColumn("Email", StringType()) \
+    .addColumn("CustomerID", LongType()) \
+    .execute()
 
+# Step B: Prepare Customer DataFrame with Surrogate Keys (IDs)
+dfdimCustomer_gold = df.dropDuplicates(["CustomerName", "Email"]) \
+    .select("CustomerName", "Email") \
+    .withColumn("CustomerID", monotonically_increasing_id())
 
+# Step C: UPSERT into Customer Table
+dt_cust = DeltaTable.forName(spark, "dbo.dimcustomer_gold")
+dt_cust.alias("gold") \
+    .merge(dfdimCustomer_gold.alias("updates"), "gold.Email = updates.Email") \
+    .whenNotMatchedInsertAll() \
+    .execute()
+
+# ==========================================
+# 4. CREATE FACT TABLE: SALES (factsales_gold)
+# ==========================================
+
+# Step A: Create the Fact table structure
+# Note: We use IDs here instead of names for performance
+DeltaTable.createIfNotExists(spark) \
+    .tableName("dbo.factsales_gold") \
+    .addColumn("CustomerID", LongType()) \
+    .addColumn("OrderDate", DateType()) \
+    .addColumn("Quantity", IntegerType()) \
+    .addColumn("UnitPrice", FloatType()) \
+    .addColumn("Tax", FloatType()) \
+    .execute()
+
+# Step B: Join Silver data with Gold Dimensions to get IDs
+dfFactSales_gold = df.alias("s") \
+    .join(dfdimCustomer_gold.alias("c"), "Email", "left") \
+    .select(
+        col("c.CustomerID"),
+        col("s.OrderDate"),
+        col("s.Quantity"),
+        col("s.UnitPrice"),
+        col("s.Tax")
+    )
+
+# Step C: Final UPSERT into Fact Table
+dt_fact = DeltaTable.forName(spark, "dbo.factsales_gold")
+dt_fact.alias("gold") \
+    .merge(
+        dfFactSales_gold.alias("updates"), 
+        "gold.OrderDate = updates.OrderDate AND gold.CustomerID = updates.CustomerID"
+    ) \
+    .whenNotMatchedInsertAll() \
+    .execute()
+
+print("Gold Layer Transformation Complete.")
+
+# ### **This transformation prepares a clean customer dimension by extracting unique customers from your Silver fact table and splitting their names into first and last components**
 from pyspark.sql.types import *
+from pyspark.sql.functions import (
+    col, dayofmonth, month, year, date_format, 
+    split, monotonically_increasing_id, coalesce, max, lit
+)
 from delta.tables import *
 
+# ==========================================
+# 1. DATA INGESTION
+# ==========================================
+# Load cleaned Silver data
+df = spark.read.table("sales_silver")
+
+# ==========================================
+# 2. DIMENSION: DATE (dimdate_gold)
+# ==========================================
+
+# Step A: Ensure table exists
+DeltaTable.createIfNotExists(spark) \
+    .tableName("dbo.dimdate_gold") \
+    .addColumn("OrderDate", DateType()) \
+    .addColumn("Day", IntegerType()) \
+    .addColumn("Month", IntegerType()) \
+    .addColumn("Year", IntegerType()) \
+    .addColumn("mmmyyyy", StringType()) \
+    .addColumn("yyyymm", StringType()) \
+    .execute()
+
+# Step B: Transform
+dfdimDate_gold = (
+    df.dropDuplicates(["OrderDate"])
+      .select(
+          col("OrderDate"),
+          dayofmonth("OrderDate").alias("Day"),
+          month("OrderDate").alias("Month"),
+          year("OrderDate").alias("Year"),
+          date_format(col("OrderDate"), "MMM-yyyy").alias("mmmyyyy"),
+          date_format(col("OrderDate"), "yyyyMM").alias("yyyymm")
+      )
+)
+
+# Step C: Merge
+dt_date = DeltaTable.forName(spark, "dbo.dimdate_gold")
+dt_date.alias("gold") \
+    .merge(dfdimDate_gold.alias("updates"), "gold.OrderDate = updates.OrderDate") \
+    .whenNotMatchedInsertAll() \
+    .execute()
+
+# ==========================================
+# 3. DIMENSION: CUSTOMER (dimcustomer_gold)
+# ==========================================
+
+# Step A: Ensure table exists
 DeltaTable.createIfNotExists(spark) \
     .tableName("dbo.dimcustomer_gold") \
     .addColumn("CustomerName", StringType()) \
@@ -100,89 +179,75 @@ DeltaTable.createIfNotExists(spark) \
     .addColumn("CustomerID", LongType()) \
     .execute()
 
+# Step B: Filter for NEW customers only (Left Anti Join)
+df_existing_cust = spark.read.table("dbo.dimcustomer_gold")
 
-# ### **This transformation prepares a clean customer dimension by extracting unique customers from your Silver fact table and splitting their names into first and last components**
-# 
-
-# #### **Dimension table customer**
-
-# In[7]:
-
-
-from pyspark.sql.functions import col, split
-
-# Create the dimCustomer_silver dataframe
-dfdimCustomer_silver = (
-    df.dropDuplicates(["CustomerName", "Email"])     # keep one row per customer
-      .select(
-          col("CustomerName"),
-          col("Email")
-      )
-      .withColumn("First", split(col("CustomerName"), " ").getItem(0))  # first name
-      .withColumn("Last", split(col("CustomerName"), " ").getItem(1))   # last name
+df_new_customers = (
+    df.dropDuplicates(["CustomerName", "Email"])
+      .select("CustomerName", "Email")
+      .withColumn("First", split(col("CustomerName"), " ").getItem(0))
+      .withColumn("Last", split(col("CustomerName"), " ").getItem(1))
+      .join(df_existing_cust, ["CustomerName", "Email"], "leftanti")
 )
 
-# Preview the first 10 rows
-display(dfdimCustomer_silver)
+# Step C: Generate Incremental IDs
+# Get current max ID or 0 if table is empty
+max_id_row = df_existing_cust.select(coalesce(max(col("CustomerID")), lit(0))).first()
+max_id = max_id_row[0] if max_id_row else 0
 
-
-# In[12]:
-
-
-from pyspark.sql.functions import monotonically_increasing_id, col, when, coalesce, max, lit
-#- ID generation (monotonically_increasing_id)
-#-- null handling (coalesce)
-
-dfdimCustomer_temp = spark.read.table("dbo.dimCustomer_gold")
-display(dfdimCustomer_temp)
-
-MAXCustomerID = dfdimCustomer_temp.select(
-    coalesce(max(col("CustomerID")), lit(0)).alias("MAXCustomerID")
-).first()[0]
-
-dfdimCustomer_gold = dfdimCustomer_silver.join(
-    dfdimCustomer_temp,
-    (dfdimCustomer_silver.CustomerName == dfdimCustomer_temp.CustomerName) &
-    (dfdimCustomer_silver.Email == dfdimCustomer_temp.Email),
-    "leftanti"
+df_customers_to_insert = df_new_customers.withColumn(
+    "CustomerID", 
+    monotonically_increasing_id() + max_id + 1
 )
 
-dfdimCustomer_gold = dfdimCustomer_gold.withColumn(
-    "CustomerID",
-    monotonically_increasing_id() + MAXCustomerID + 1
-)
-
-display(dfdimCustomer_gold)
-
-
-# In[13]:
-
-
-from delta.tables import *
-
-# Load the Delta table from the metastore
-deltaTable = DeltaTable.forName(spark, "dbo.dimcustomer_gold")
-
-# New customer rows that need to be inserted
-dfUpdates = dfdimCustomer_gold
-
-# Perform MERGE: update nothing, insert new customers
-deltaTable.alias("gold") \
+# Step D: Merge new records
+dt_cust = DeltaTable.forName(spark, "dbo.dimcustomer_gold")
+dt_cust.alias("gold") \
     .merge(
-        dfUpdates.alias("updates"),
+        df_customers_to_insert.alias("updates"), 
         "gold.CustomerName = updates.CustomerName AND gold.Email = updates.Email"
     ) \
-    .whenMatchedUpdate(set={
-        # No updates needed (same as your screenshot)
-    }) \
-    .whenNotMatchedInsert(values={
-        "CustomerName": "updates.CustomerName",
-        "Email": "updates.Email",
-        "First": "updates.First",
-        "Last": "updates.Last",
-        "CustomerID": "updates.CustomerID"
-    }) \
+    .whenNotMatchedInsertAll() \
     .execute()
+
+# ==========================================
+# 4. FACT TABLE: SALES (factsales_gold)
+# ==========================================
+
+# Step A: Ensure table exists
+DeltaTable.createIfNotExists(spark) \
+    .tableName("dbo.factsales_gold") \
+    .addColumn("CustomerID", LongType()) \
+    .addColumn("OrderDate", DateType()) \
+    .addColumn("Quantity", IntegerType()) \
+    .addColumn("UnitPrice", FloatType()) \
+    .addColumn("Tax", FloatType()) \
+    .execute()
+
+# Step B: Join with Gold Customers to get the correct Surrogate Keys
+df_final_cust_lookup = spark.read.table("dbo.dimcustomer_gold")
+
+df_fact_sales = df.alias("s") \
+    .join(df_final_cust_lookup.alias("c"), ["CustomerName", "Email"], "left") \
+    .select(
+        col("c.CustomerID"),
+        col("s.OrderDate"),
+        col("s.Quantity"),
+        col("s.UnitPrice"),
+        col("s.Tax")
+    )
+
+# Step C: Final Merge
+dt_fact = DeltaTable.forName(spark, "dbo.factsales_gold")
+dt_fact.alias("gold") \
+    .merge(
+        df_fact_sales.alias("updates"),
+        "gold.OrderDate = updates.OrderDate AND gold.CustomerID = updates.CustomerID"
+    ) \
+    .whenNotMatchedInsertAll() \
+    .execute()
+
+print("Gold Star Schema successfully updated.")
 
 
 # ### **A Product Dimension is part of your Gold layer. It provides:**
@@ -196,112 +261,116 @@ deltaTable.alias("gold") \
 # In[14]:
 
 
-DeltaTable.createIfNotExists(spark) \
-  .tableName("dbo.dimproduct_gold") \
-  .addColumn("ItemName", StringType()) \
-  .addColumn("ItemID", LongType()) \
-  .addColumn("ItemInfo", StringType()) \
-  .execute()
-
-
-# In[41]:
-
-
-from pyspark.sql.functions import col, split, lit, when
-
-# Create product_silver dataframe
-dfdimProduct_silver = df.dropDuplicates(["Item"]).select(col("Item")) \
-    .withColumn("ItemName", split(col("Item"), " ").getItem(0)) \
-    .withColumn(
-        "ItemInfo",
-         when(
-            (split(
-                col("Item"), " "
-                ).getItem(1).isNull()
-            ) | (
-                split(col("Item"), " ").getItem(1)==""
-                ), lit("")).otherwise(
-                    split(col("Item"), " ").getItem(1)
-                    )
-                    )
-
-# Display the first 10 rows of the dataframe to preview your data
-display(dfdimProduct_silver)
-
-
-# In[18]:
-
-
-from pyspark.sql.functions import monotonically_increasing_id, col, lit, max, coalesce
-
-# Load existing Gold product dimension
-dfdimProduct_temp = spark.read.table("dbo.dimProduct_gold")
-
-# Find the highest existing ItemID (or 0 if table is empty)
-MAXProductID = dfdimProduct_temp.select(
-    coalesce(max(col("ItemID")), lit(0)).alias("MAXItemID")
-).first()[0]
-
-# Identify NEW products (those not already in dimProduct_gold)
-dfdimProduct_gold = dfdimProduct_silver.join(
-    dfdimProduct_temp,
-    (dfdimProduct_silver.ItemName == dfdimProduct_temp.ItemName) &
-    (dfdimProduct_silver.ItemInfo == dfdimProduct_temp.ItemInfo),
-    "leftanti"
+from pyspark.sql.types import *
+from pyspark.sql.functions import (
+    col, dayofmonth, month, year, date_format, 
+    split, monotonically_increasing_id, coalesce, max, lit, when
 )
-
-# Assign new surrogate ItemIDs
-dfdimProduct_gold = dfdimProduct_gold.withColumn(
-    "ItemID",
-    monotonically_increasing_id() + MAXProductID + 1
-)
-
-# Preview
-display(dfdimProduct_gold)
-
-
-# In[29]:
-
-
 from delta.tables import *
 
-# Load the Delta table from the metastore
-deltaTable = DeltaTable.forPath(spark, "abfss://dp700lab6@onelake.dfs.fabric.microsoft.com/sales.Lakehouse/Tables/dbo/dimproduct_gold")
+# ==============================================================================
+# 1. DATA INGESTION
+# ==============================================================================
+df = spark.read.table("sales_silver")
 
-# New product rows that need to be inserted
-dfUpdates = dfdimProduct_gold
-
-# Perform MERGE: update nothing, insert new products
-deltaTable.alias("gold") \
-    .merge(
-        dfUpdates.alias("updates"),
-        "gold.ItemName = updates.ItemName AND gold.ItemInfo = updates.ItemInfo"
-    ) \
-    .whenMatchedUpdate(set={
-        # No updates needed (same as your screenshot)
-    }) \
-    .whenNotMatchedInsert(values={
-        "ItemName": "updates.ItemName",
-        "ItemInfo": "updates.ItemInfo",
-        "ItemID": "updates.ItemID"
-    }) \
+# ==============================================================================
+# 2. DIMENSION: DATE (dimdate_gold)
+# ==============================================================================
+DeltaTable.createIfNotExists(spark) \
+    .tableName("dbo.dimdate_gold") \
+    .addColumn("OrderDate", DateType()) \
+    .addColumn("Day", IntegerType()) \
+    .addColumn("Month", IntegerType()) \
+    .addColumn("Year", IntegerType()) \
+    .addColumn("mmmyyyy", StringType()) \
+    .addColumn("yyyymm", StringType()) \
     .execute()
 
+dfdimDate_gold = (
+    df.dropDuplicates(["OrderDate"])
+      .select(
+          col("OrderDate"),
+          dayofmonth("OrderDate").alias("Day"),
+          month("OrderDate").alias("Month"),
+          year("OrderDate").alias("Year"),
+          date_format(col("OrderDate"), "MMM-yyyy").alias("mmmyyyy"),
+          date_format(col("OrderDate"), "yyyyMM").alias("yyyymm")
+      )
+)
 
-# In[ ]:
+dt_date = DeltaTable.forName(spark, "dbo.dimdate_gold")
+dt_date.alias("gold") \
+    .merge(dfdimDate_gold.alias("updates"), "gold.OrderDate = updates.OrderDate") \
+    .whenNotMatchedInsertAll() \
+    .execute()
 
+# ==============================================================================
+# 3. DIMENSION: CUSTOMER (dimcustomer_gold)
+# ==============================================================================
+DeltaTable.createIfNotExists(spark) \
+    .tableName("dbo.dimcustomer_gold") \
+    .addColumn("CustomerName", StringType()) \
+    .addColumn("Email", StringType()) \
+    .addColumn("First", StringType()) \
+    .addColumn("Last", StringType()) \
+    .addColumn("CustomerID", LongType()) \
+    .execute()
 
+df_existing_cust = spark.read.table("dbo.dimcustomer_gold")
 
+# Process new customers with Name Splitting
+df_new_customers = (
+    df.dropDuplicates(["CustomerName", "Email"])
+      .select("CustomerName", "Email")
+      .withColumn("First", split(col("CustomerName"), " ").getItem(0))
+      .withColumn("Last", split(col("CustomerName"), " ").getItem(1))
+      .join(df_existing_cust, ["CustomerName", "Email"], "leftanti")
+)
 
+# Incremental ID Generation
+max_cust_id = df_existing_cust.select(coalesce(max(col("CustomerID")), lit(0))).first()[0]
+df_cust_to_insert = df_new_customers.withColumn("CustomerID", monotonically_increasing_id() + max_cust_id + 1)
 
-# ## **FACT SALES GOLD TABLE**
+dt_cust = DeltaTable.forName(spark, "dbo.dimcustomer_gold")
+dt_cust.alias("gold") \
+    .merge(df_cust_to_insert.alias("updates"), "gold.Email = updates.Email") \
+    .whenNotMatchedInsertAll() \
+    .execute()
 
-# In[25]:
+# ==============================================================================
+# 4. DIMENSION: PRODUCT (dimproduct_gold)
+# ==============================================================================
+DeltaTable.createIfNotExists(spark) \
+    .tableName("dbo.dimproduct_gold") \
+    .addColumn("ItemName", StringType()) \
+    .addColumn("ItemID", LongType()) \
+    .addColumn("ItemInfo", StringType()) \
+    .execute()
 
+df_existing_prod = spark.read.table("dbo.dimproduct_gold")
 
-from pyspark.sql.types import *
-from delta.tables import *
+# Extract unique items and split metadata
+df_prod_silver = df.dropDuplicates(["Item"]).select(col("Item")) \
+    .withColumn("ItemName", split(col("Item"), " ").getItem(0)) \
+    .withColumn("ItemInfo", 
+                when((split(col("Item"), " ").getItem(1).isNull()) | 
+                     (split(col("Item"), " ").getItem(1) == ""), lit(""))
+                .otherwise(split(col("Item"), " ").getItem(1))) \
+    .join(df_existing_prod, ["ItemName", "ItemInfo"], "leftanti")
 
+# Incremental ID Generation
+max_prod_id = df_existing_prod.select(coalesce(max(col("ItemID")), lit(0))).first()[0]
+df_prod_to_insert = df_prod_silver.withColumn("ItemID", monotonically_increasing_id() + max_prod_id + 1)
+
+dt_prod = DeltaTable.forName(spark, "dbo.dimproduct_gold")
+dt_prod.alias("gold") \
+    .merge(df_prod_to_insert.alias("updates"), "gold.ItemName = updates.ItemName AND gold.ItemInfo = updates.ItemInfo") \
+    .whenNotMatchedInsertAll() \
+    .execute()
+
+# ==============================================================================
+# 5. FACT TABLE: SALES (factsales_gold)
+# ==============================================================================
 DeltaTable.createIfNotExists(spark) \
     .tableName("dbo.factsales_gold") \
     .addColumn("CustomerID", LongType()) \
@@ -312,69 +381,37 @@ DeltaTable.createIfNotExists(spark) \
     .addColumn("Tax", FloatType()) \
     .execute()
 
+# Re-read Gold Dimensions for fresh ID Lookups
+dimCust = spark.read.table("dbo.dimcustomer_gold")
+dimProd = spark.read.table("dbo.dimproduct_gold")
 
-# In[37]:
+# Prepare Silver Data for joining (matching the Product split logic)
+df_fact_prep = df.withColumn("ItemName", split(col("Item"), " ").getItem(0)) \
+                 .withColumn("ItemInfo", 
+                             when((split(col("Item"), " ").getItem(1).isNull()) | 
+                                  (split(col("Item"), " ").getItem(1) == ""), lit(""))
+                             .otherwise(split(col("Item"), " ").getItem(1)))
 
+# Build Fact Table by joining with Dimensions
+dfFactSales_gold = df_fact_prep.alias("f") \
+    .join(dimCust.alias("c"), ["CustomerName", "Email"], "left") \
+    .join(dimProd.alias("p"), ["ItemName", "ItemInfo"], "left") \
+    .select(
+        col("c.CustomerID"),
+        col("p.ItemID"),
+        col("f.OrderDate"),
+        col("f.Quantity"),
+        col("f.UnitPrice"),
+        col("f.Tax")
+    ).orderBy("OrderDate")
 
-display (df)
-
-
-# In[39]:
-
-
-from pyspark.sql.functions import col
-
-dfdimCustomer_temp = spark.read.table("dbo.dimCustomer_gold")
-dfdimProduct_temp = spark.read.table("dbo.dimProduct_gold")
-
-df = df.withColumn("ItemName",split(col("Item"), ", ").getItem(0)) \
-    .withColumn("ItemInfo",when((split(col("Item"), ", ").getItem(1).isNull() | (split(col("Item"), ", ").getItem(1)=="")),lit("")).otherwise(split(col("Item"), ", ").getItem(1)))
-
-# Create Sales_gold dataframe
-dfFactSales_gold = df.alias("df1").join(dfdimCustomer_temp.alias("df2"), 
-                                        (df.CustomerName == dfdimCustomer_temp.CustomerName) & (df.Email == dfdimCustomer_temp.Email), "left") \
-                        .join(dfdimProduct_temp.alias("df3"),(df.ItemName == dfdimProduct_temp.ItemName) & (df.ItemInfo == dfdimProduct_temp.ItemID), "left") \
-    .select(col("df2.CustomerID") \
-        , col("df3.ItemID") \
-        , col("df1.OrderDate") \
-        , col("df1.Quantity") \
-        , col("df1.UnitPrice") \
-        , col("df1.Tax")) \
-    .orderBy(col("df1.OrderDate"), col("df2.CustomerID"), col("df3.ItemID"))
-
-
-# Display the first 10 rows of the dataframe to preview your data
-display(dfFactSales_gold)
-display(df)
-
-
-# In[42]:
-
-
-from delta.tables import *
-
-deltaTable = DeltaTable.forPath(spark, "abfss://dp700lab6@onelake.dfs.fabric.microsoft.com/sales.Lakehouse/Tables/dbo/factsales_gold")
-
-dfUpdates = dfFactSales_gold
-
-deltaTable.alias('gold') \
-    .merge(
-        dfUpdates.alias('updates'),
-        'gold.OrderDate = updates.OrderDate AND gold.CustomerID = updates.CustomerID AND gold.ItemID = updates.ItemID'
-    ) \
-    .whenMatchedUpdate(set =
-        {
-        }
-    ) \
-    .whenNotMatchedInsert(values =
-        {
-            "CustomerID": "updates.CustomerID",
-            "ItemID": "updates.ItemID",
-            "OrderDate": "updates.OrderDate",
-            "Quantity": "updates.Quantity",
-            "UnitPrice": "updates.UnitPrice",
-            "Tax": "updates.Tax"
-        }
-    ) \
+# Final Merge into Fact Table
+dt_fact = DeltaTable.forName(spark, "dbo.factsales_gold")
+dt_fact.alias("gold") \
+    .merge(dfFactSales_gold.alias("updates"), 
+           "gold.OrderDate = updates.OrderDate AND gold.CustomerID = updates.CustomerID AND gold.ItemID = updates.ItemID") \
+    .whenNotMatchedInsertAll() \
     .execute()
+
+print("Star Schema (Gold) successfully populated.")
 
