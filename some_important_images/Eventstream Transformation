@@ -1,6 +1,25 @@
-docs: add technical explanation of Temporal Windowing for stream processing
+docs: add technical documentation for Temporal Windowing strategies
 
-- Tumbling Windows: Fixed-size, non-overlapping, and contiguous time intervals (e.g., every 5 minutes). Each event belongs to exactly one window.
-- Hopping Windows: Fixed-size intervals that overlap based on a defined 'hop' or advance period (e.g., a 10-minute window that starts every 5 minutes).
-- Sliding Windows: Similar to hopping windows but typically triggered by the occurrence of an event, allowing for look-back analysis within a specific duration.
-- Session Windows: Dynamic windows that group events based on activity. The window stays open as long as events arrive and closes after a specified period of inactivity (the 'gap').
+- Tumbling Windows: Implemented as fixed-sized, non-overlapping intervals.
+  * Logic: A 10s window starts every 10s; events belong to exactly one bucket.
+  * Example: Counting website logins in discrete 5-minute blocks.
+  * Use Case: Standard periodic reporting (e.g., total sales per hour).
+
+
+
+- Hopping Windows: Implemented as overlapping intervals defined by window size and hop (advance) period.
+  * Logic: A 10m window starting every 5m creates overlapping data points.
+  * Example: A 24-hour moving average of stock prices updating every hour.
+  * Use Case: Trend analysis and "smoothed" data visualizations.
+
+
+
+- Sliding Windows: Implemented as event-triggered intervals that look back/forward for a specific duration.
+  * Logic: Bound to the timestamp of the events themselves rather than a fixed clock.
+  * Example: Alerting if sensor data exceeds a threshold 3x within any 5m span.
+  * Use Case: Real-time monitoring and high-precision threshold alerts.
+
+- Session Windows: Implemented as activity-based groups that filter periods of inactivity.
+  * Logic: Dynamic duration governed by a 'gap timeout' (session closes after X minutes of silence).
+  * Example: Grouping clickstream data until a user is inactive for 5 minutes.
+  * Use Case: User behavior analysis and sessionized clickstream processing.
