@@ -1,0 +1,46 @@
+// ==========================================================================================
+// Description: Create a materialized view to track daily taxi metrics by vendor.
+// Purpose: Encapsulates a summarize statement that auto-updates as new data arrives.
+// ==========================================================================================
+
+// 1. Create Materialized View
+// This view pre-calculates trip counts, average fares, and total revenue.
+.create materialized-view TripsByVendor on table TaxiTrips
+{
+    TaxiTrips
+    | summarize 
+        trips = count(), 
+        avg_fare = avg(fare_amount), 
+        total_revenue = sum(fare_amount)
+    by 
+        vendor_id, 
+        pickup_date = format_datetime(pickup_datetime, "yyyy-MM-dd")
+}
+
+// 2. Sample Query for the Materialized View
+// Queries the view like a regular table to retrieve the last 7 days of performance.
+TripsByVendor
+| where pickup_date >= ago(7d)
+| project pickup_date, vendor_id, trips, avg_fare, total_revenue
+| sort by pickup_date desc, total_revenue desc
+
+
+// ==========================================================================================
+// Description: Stored function to filter taxi trips by passenger count.
+// Parameters: num_passengers (long) - The minimum number of passengers required.
+// ==========================================================================================
+
+// 1. Create or Alter the Function
+// This function acts as a reusable view that accepts parameters for dynamic filtering.
+.create-or-alter function trips_by_min_passenger_count(num_passengers:long)
+{
+    TaxiTrips
+    | where passenger_count >= num_passengers 
+    | project trip_id, pickup_datetime
+}
+
+// 2. Usage Example
+// To call the function, treat it like a virtual table and pass the required arguments.
+// Example: Find 10 trips with at least three passengers.
+trips_by_min_passenger_count(3)
+| take 10
