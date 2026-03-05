@@ -1,1 +1,6 @@
+docs: add technical explanation of Temporal Windowing for stream processing
 
+- Tumbling Windows: Fixed-size, non-overlapping, and contiguous time intervals (e.g., every 5 minutes). Each event belongs to exactly one window.
+- Hopping Windows: Fixed-size intervals that overlap based on a defined 'hop' or advance period (e.g., a 10-minute window that starts every 5 minutes).
+- Sliding Windows: Similar to hopping windows but typically triggered by the occurrence of an event, allowing for look-back analysis within a specific duration.
+- Session Windows: Dynamic windows that group events based on activity. The window stays open as long as events arrive and closes after a specified period of inactivity (the 'gap').
