@@ -1,16 +1,16 @@
 -------------------------- Filter data early and effectively
 
-Filtering reduces the amount of data that subsequent operations need to process, and KQL databases use indexes and data organization techniques that make early filtering especially efficient.
+// Filtering reduces the amount of data that subsequent operations need to process, and KQL databases use indexes and data organization techniques that make early filtering especially efficient.
 
-Time-based filtering is effective because Eventhouses typically contain time-series data:
+// Time-based filtering is effective because Eventhouses typically contain time-series data:
 
 TaxiTrips
 | where pickup_datetime > ago(30min)  // Filter first - uses time index
 | project trip_id, vendor_id, pickup_datetime, fare_amount
 | summarize avg_fare = avg(fare_amount) by vendor_id
 
-Order your filters by how much data they eliminate - put filters that eliminate the most data first. 
-Think of it like a funnel: start with the filter that removes the most rows, then apply more specific filters to the remaining data:
+// Order your filters by how much data they eliminate - put filters that eliminate the most data first. 
+// Think of it like a funnel: start with the filter that removes the most rows, then apply more specific filters to the remaining data:
 
 TaxiTrips
 | where pickup_datetime > ago(1d)    // Time filter first - eliminates most data
@@ -22,8 +22,8 @@ TaxiTrips
 
 -------------------------- Reduce columns early
 
-Projecting or selecting only the columns you need reduces resource usage. 
-This is especially important when working with wide tables that have many columns.
+// Projecting or selecting only the columns you need reduces resource usage. 
+// This is especially important when working with wide tables that have many columns.
 
 TaxiTrips
 | project trip_id, pickup_datetime, fare_amount  // Select columns early
@@ -33,19 +33,20 @@ TaxiTrips
 
  -------------------------- Optimize aggregations and joins
 
-Aggregations and joins are resource-intensive operations because they need to process and combine large amounts of data. How you structure them can significantly affect query performance.
+// Aggregations and joins are resource-intensive operations because they need to process and combine large amounts of data. How you structure them can significantly affect query performance.
 
-For aggregations, limit results when exploring data:
+// For aggregations, limit results when exploring data:
 
 kql
 TaxiTrips
 | where pickup_datetime > ago(1d)
 | summarize trip_count = count() by trip_id, vendor_id
 | limit 1000  // Limit results for exploration
-For joins, put the smaller table first. When joining tables, KQL processes the first table to match with the second table. Starting with a smaller table means fewer rows to process, making the join more efficient.
+// For joins, put the smaller table first. When joining tables, KQL processes the first table to match with the second table. Starting with a smaller table means fewer rows to process, making the join more efficient.
 
-kql
+// kql
 // Good: Small vendor table first
+
 VendorInfo        
 | join kind=inner TaxiTrips on vendor_id
 
