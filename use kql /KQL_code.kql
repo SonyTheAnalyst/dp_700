@@ -1,0 +1,31 @@
+-------------------------- Filter data early and effectively
+
+Filtering reduces the amount of data that subsequent operations need to process, and KQL databases use indexes and data organization techniques that make early filtering especially efficient.
+
+Time-based filtering is effective because Eventhouses typically contain time-series data:
+
+TaxiTrips
+| where pickup_datetime > ago(30min)  // Filter first - uses time index
+| project trip_id, vendor_id, pickup_datetime, fare_amount
+| summarize avg_fare = avg(fare_amount) by vendor_id
+
+Order your filters by how much data they eliminate - put filters that eliminate the most data first. 
+Think of it like a funnel: start with the filter that removes the most rows, then apply more specific filters to the remaining data:
+
+TaxiTrips
+| where pickup_datetime > ago(1d)    // Time filter first - eliminates most data
+| where vendor_id == "VTS"           // Specific vendor - eliminates some data  
+| where fare_amount > 0              // Value filter - eliminates least data
+| summarize trip_count = count()
+
+
+
+-------------------------- Reduce columns early
+
+Projecting or selecting only the columns you need reduces resource usage. 
+This is especially important when working with wide tables that have many columns.
+
+TaxiTrips
+| project trip_id, pickup_datetime, fare_amount  // Select columns early
+| where pickup_datetime > ago(1d)                // Then filter
+| summarize avg_fare = avg(fare_amount)
