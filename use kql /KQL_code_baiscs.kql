@@ -1,3 +1,8 @@
+----------------------------------------------------------------
+// This query returns the number of ingestions per hour in the given table.
+YOUR_TABLE_HERE
+| summarize IngestionCount = count() by bin(ingestion_time(), 1h)
+
 -------------------------- Filter data early and effectively
 
 // Filtering reduces the amount of data that subsequent operations need to process, and KQL databases use indexes and data organization techniques that make early filtering especially efficient.
