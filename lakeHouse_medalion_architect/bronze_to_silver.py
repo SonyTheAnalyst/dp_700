@@ -94,3 +94,28 @@ deltaTable.alias("silver") \
     .whenMatchedUpdateAll() \
     .whenNotMatchedInsertAll() \
     .execute()
+
+##WE CAN USE THE FOLLOWING CODE BELLOW TO INSERT PARTICULAR FIELDS
+.whenMatchedUpdate(set={
+    .whenMatchedUpdateAll() \
+        # Existing records could be updated here (e.g., if UnitPrice changed)
+    .whenNotMatchedInsertAll() \
+    }) \
+    .execute()
+    .whenNotMatchedInsert(values={
+        # If the record doesn't exist in Silver, insert the new data
+        "SalesOrderNumber": "updates.SalesOrderNumber",
+        "SalesOrderLineNumber": "updates.SalesOrderLineNumber",
+        "OrderDate": "updates.OrderDate",
+        "CustomerName": "updates.CustomerName",
+        "Email": "updates.Email",
+        "Item": "updates.Item",
+        "Quantity": "updates.Quantity",
+        "UnitPrice": "updates.UnitPrice",
+        "Tax": "updates.Tax",
+        "FileName": "updates.FileName",
+        "IsFlagged": "updates.IsFlagged",
+        "CreatedTS": "updates.CreatedTS",
+        "ModifiedTS": "updates.ModifiedTS"
+    }) \
+    .execute()
