@@ -46,6 +46,11 @@ Microsoft Fabric data warehouses include dynamic management views (DMVs), which 
     ```sql
    SELECT * FROM sys.dm_exec_connections;
     ```
+check the information about the column name in this site :
+https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-exec-connections-transact-sql?view=sql-server-ver17
+
+
+
 
 1. Use the **&#9655; Run** button to run the SQL script and view the results, which include details of all connections to the data warehouse.
 1. Modify the SQL code to query the **sys.dm_exec_sessions** DMV, like this:
