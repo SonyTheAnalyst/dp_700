@@ -1,36 +1,76 @@
-docs: add technical documentation for Temporal Windowing strategies
+# Event Stream Transformation
 
-- Tumbling Windows: Implemented as fixed-sized, non-overlapping intervals.
-  * Logic: A 10s window starts every 10s; events belong to exactly one bucket.
-  * Example: Counting website logins in discrete 5-minute blocks.
-  * Use Case: Standard periodic reporting (e.g., total sales per hour).
+## Overview
 
+Event stream transformation involves converting data from raw streams into meaningful information. This process is essential for real-time analytics, especially when dealing with temporal data. In this document, we will explore several temporal windowing strategies, their usage, and provide examples for clarity.
 
+## Temporal Windowing Strategies
 
-docs: add technical breakdown of Hopping vs. Sliding windows
+Temporal windowing is crucial for managing and processing streams of data. Below are some of the most common strategies:
 
-. Hopping Windows (The "Predictable Overlap")
-Hopping windows are scheduled. They start at fixed intervals regardless of whether data arrives or not. You define them using two fixed numbers: Window Size and Hop Size.
+| Strategy             | Description                                              | Use Cases                            |
+|----------------------|----------------------------------------------------------|-------------------------------------|
+| **Tumbling Window**   | Non-overlapping time segments.                            | Aggregating records every minute.  |
+| **Sliding Window**    | Overlapping segments allowing for more flexibility.      | Tracking event counts over time.   |
+| **Session Window**    | Segments based on periods of activity.                   | Sessionization of user events.     |
 
-- The Logic: If you have a 10-minute window that hops every 5 minutes, a new window is created every 5 minutes, but it looks back at 10 minutes of data.
-- The Overlap: Because the hop (5m) is smaller than the window (10m), the second half of Window A is actually the first half of Window B.
-- Example: Imagine a store manager who wants a "Last 10 minutes" sales report every 5 minutes.
-    * Window 1 (10:00 - 10:10): Shows sales from 10:00 to 10:10.
-    * Window 2 (10:05 - 10:15): Shows sales from 10:05 to 10:15.
-    * Notice: The sales that happened at 10:07 appear in both reports.
+## Detailed Examples
 
+### 1. Tumbling Window
 
+```python
+# Example of Tumbling Window in Python
+from datetime import datetime, timedelta
 
-. Sliding Windows (The "Reactionary Overlap")
-Sliding windows are more "fluid." In systems like Spark, a sliding window is often used to evaluate a condition over a period of time relative to each event.
+def tumbling_window(data, window_size):
+    result = []
+    window_start = min(data.keys())
+    while window_start < max(data.keys()):
+        window_end = window_start + window_size
+        window_data = [v for k, v in data.items() if window_start <= k < window_end]
+        result.append((window_start, window_end, sum(window_data)))
+        window_start = window_end
+    return result
+```
 
-- The Logic: They are not fixed to a clock (like 10:05, 10:10). Instead, the window "slides" as events move through time. It is typically used to see if a certain threshold is met within any interval of a specific length.
-- The Difference: While a Hopping window says "Give me a report every 5 minutes," a Sliding window says "Every time a new event arrives, look back at the last 10 minutes."
-- Example: A security alarm.
-    * If a sensor is tripped at 10:01, 10:02, and 10:03, a sliding window of 5 minutes checks: "Have there been 3 trips in the last 5 minutes?"
-    * The window doesn't wait for 10:05 to check; it evaluates as the events happen.
+### 2. Sliding Window
 
-- Session Windows: Implemented as activity-based groups that filter periods of inactivity.
-  * Logic: Dynamic duration governed by a 'gap timeout' (session closes after X minutes of silence).
-  * Example: Grouping clickstream data until a user is inactive for 5 minutes.
-  * Use Case: User behavior analysis and sessionized clickstream processing.
+```python
+# Example of Sliding Window in Python
+from datetime import datetime, timedelta
+
+def sliding_window(data, window_size, step_size):
+    result = []
+    window_start = min(data.keys())
+    while window_start < max(data.keys()) - window_size:
+        window_end = window_start + window_size
+        window_data = [v for k, v in data.items() if window_start <= k < window_end]
+        result.append((window_start, window_end, sum(window_data)))
+        window_start += step_size
+    return result
+```
+
+### 3. Session Window
+
+```python
+# Example of Session Window in Python
+from datetime import datetime, timedelta
+
+def session_window(data, gap_duration):
+    result = []
+    current_session = []
+    last_timestamp = None
+    for timestamp, value in sorted(data.items()):
+        if last_timestamp and timestamp - last_timestamp > gap_duration:
+            result.append(current_session)
+            current_session = []
+        current_session.append(value)
+        last_timestamp = timestamp
+    if current_session:
+        result.append(current_session)
+    return result
+```
+
+## Conclusion
+
+Understanding and implementing the right temporal windowing strategy is essential in event stream transformation. This approach ensures better data aggregation and real-time analytics, leading to informed decision-making.
