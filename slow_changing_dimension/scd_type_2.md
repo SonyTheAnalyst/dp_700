@@ -19,7 +19,7 @@
 
 # Store procedure
 
-```
+```sql
 CREATE OR ALTER PROCEDURE dbo.sp_upsert_customer_scd2
 AS
 BEGIN
