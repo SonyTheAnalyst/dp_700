@@ -59,6 +59,7 @@ SELECT* FROM employee_function(2)
 1. The Scalar Function (Simple Calculation)
 Use this when you want to return a single value, like a tax calculation or a formatted string. Note that in Fabric, scalar functions must be defined within a BEGIN...END block.
 	
+```sql
 CREATE FUNCTION dp_700.CalculateAnnualBonus (
     @salary DECIMAL(18, 2), 
     @performance_rating INT
@@ -70,7 +71,7 @@ BEGIN
     RETURN (CASE WHEN @performance_rating = 5 THEN @salary * 0.10 ELSE @salary * 0.05 END);
 END;
 Go
-
+```
 
 -- How to use it:
 SELECT name, salary, dp_700.CalculateAnnualBonus(salary, 5) AS bonus
