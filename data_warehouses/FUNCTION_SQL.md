@@ -1,6 +1,6 @@
 
-'''sql
 
+sql ''' 
 CREATE SCHEMA dp_700;
 GO
 DROP TABLE dbo.employee;
@@ -30,8 +30,7 @@ VALUES
 	(6, 'Emma Davis', 103, '2021-07-18', 62000.00);
 GO 
 
-SELECT* FROM dp_700.employee
-'''
+SELECT* FROM dp_700.employee'''
 
 
 
