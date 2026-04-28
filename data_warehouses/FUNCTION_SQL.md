@@ -1,6 +1,6 @@
 
 
-	
+```sql	
 CREATE SCHEMA dp_700;
 GO
 DROP TABLE dbo.employee;
@@ -31,7 +31,7 @@ VALUES
 GO 
 
 SELECT* FROM dp_700.employee
-	
+```
 
 
 
@@ -39,7 +39,7 @@ SELECT* FROM dp_700.employee
 
 
 
-	
+```sql
 CREATE FUNCTION employee_function (@employee_id INT)
 RETURNS TABLE
 AS 
@@ -52,7 +52,7 @@ RETURN
 
 SELECT* FROM employee_function(2)
 
-
+```
 
 
 	
@@ -71,12 +71,12 @@ BEGIN
     RETURN (CASE WHEN @performance_rating = 5 THEN @salary * 0.10 ELSE @salary * 0.05 END);
 END;
 Go
-```
+
 
 -- How to use it:
 SELECT name, salary, dp_700.CalculateAnnualBonus(salary, 5) AS bonus
 FROM dp_700.employee;
-
+```
 
 
 
@@ -87,6 +87,7 @@ FROM dp_700.employee;
 2. The Multi-Parameter Table Function (Dynamic Filtering)
 Your current function filters by ID. This version allows you to filter by a department and a minimum salary threshold simultaneously, which is very common for reporting.
 
+```sql
 CREATE FUNCTION dp_700.GetHighEarnersByDept (
     @dept_id INT, 
     @min_salary DECIMAL(18, 2)
@@ -106,7 +107,7 @@ GO
 
 -- How to use it:
 SELECT * FROM dp_700.GetHighEarnersByDept(102, 80000);
-
+```
 
 
 
@@ -120,7 +121,7 @@ SELECT * FROM dp_700.GetHighEarnersByDept(102, 80000);
 This example calculates how many years an employee has been with the company based on the hire_date column visible in your screenshot.
 
   
-
+```sql
 CREATE FUNCTION dp_700.GetEmployeeTenure (@emp_id INT)
 RETURNS TABLE
 AS
@@ -136,8 +137,7 @@ GO
 
 -- How to use it:
 SELECT * FROM dp_700.GetEmployeeTenure(2);
-
-'''
+```
 
 
 
