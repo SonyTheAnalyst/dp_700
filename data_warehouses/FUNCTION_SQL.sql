@@ -1,6 +1,6 @@
 
 
-sql ''' 
+	
 CREATE SCHEMA dp_700;
 GO
 DROP TABLE dbo.employee;
@@ -30,12 +30,16 @@ VALUES
 	(6, 'Emma Davis', 103, '2021-07-18', 62000.00);
 GO 
 
-SELECT* FROM dp_700.employee'''
+SELECT* FROM dp_700.employee
+	
 
 
 
-  '''sql
 
+
+
+
+	
 CREATE FUNCTION employee_function (@employee_id INT)
 RETURNS TABLE
 AS 
@@ -48,6 +52,13 @@ RETURN
 
 SELECT* FROM employee_function(2)
 
+
+
+
+	
+1. The Scalar Function (Simple Calculation)
+Use this when you want to return a single value, like a tax calculation or a formatted string. Note that in Fabric, scalar functions must be defined within a BEGIN...END block.
+	
 CREATE FUNCTION dp_700.CalculateAnnualBonus (
     @salary DECIMAL(18, 2), 
     @performance_rating INT
@@ -58,22 +69,22 @@ BEGIN
     -- Returns 10% if rating is 5, else 5%
     RETURN (CASE WHEN @performance_rating = 5 THEN @salary * 0.10 ELSE @salary * 0.05 END);
 END;
-GO
-'''
+Go
 
-
-
-'''sql
 
 -- How to use it:
 SELECT name, salary, dp_700.CalculateAnnualBonus(salary, 5) AS bonus
 FROM dp_700.employee;
-'''
 
 
 
 
-'''sql
+
+
+
+
+2. The Multi-Parameter Table Function (Dynamic Filtering)
+Your current function filters by ID. This version allows you to filter by a department and a minimum salary threshold simultaneously, which is very common for reporting.
 
 CREATE FUNCTION dp_700.GetHighEarnersByDept (
     @dept_id INT, 
@@ -91,17 +102,24 @@ RETURN (
       AND salary >= @min_salary
 );
 GO
-'''
 
 -- How to use it:
 SELECT * FROM dp_700.GetHighEarnersByDept(102, 80000);
+
+
+
+
+
+
+
+
 
 
 3. The Date-Logic Function (Tenure Analysis)
 This example calculates how many years an employee has been with the company based on the hire_date column visible in your screenshot.
 
   
-'''sql
+
 CREATE FUNCTION dp_700.GetEmployeeTenure (@emp_id INT)
 RETURNS TABLE
 AS
